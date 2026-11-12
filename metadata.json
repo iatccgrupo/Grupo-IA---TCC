@@ -1,0 +1,6 @@
+{
+  "name": "Aventura do Saber",
+  "description": "Plataforma educacional lúdica e interativa para crianças com trilha de aventuras, atividades de fonemas e letras, gamificação com medalhas e área do responsável alinhada à BNCC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
