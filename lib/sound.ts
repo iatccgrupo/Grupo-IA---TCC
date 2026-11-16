@@ -128,33 +128,50 @@ export const playStarSound = (starIndex: number = 0) => {
   }
 };
 
-export const speakInPortuguese = (text: string, slowRate: boolean = false): Promise<void> => {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      resolve();
-      return;
+import { NextResponse } from 'next/server';
+import { GoogleGenAI } from '@google/genai';
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+export async function POST(req: Request) {
+  try {
+    const { text, slowRate } = await req.json();
+
+    if (!text) {
+      return NextResponse.json({ error: 'Texto obrigatório' }, { status: 400 });
     }
 
-    try {
-      window.speechSynthesis.cancel(); // Stop any pending utterance
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'pt-BR';
-      utterance.rate = slowRate ? 0.8 : 0.95;
-      utterance.pitch = 1.15; // friendly, warm kid-oriented tone
+    const prompt = slowRate
+      ? `Leia em português do Brasil de forma pausada, clara e amigável para uma criança: "${text}"`
+      : `Leia em português do Brasil de forma natural, calorosa e amigável: "${text}"`;
 
-      // Try to find a pt-BR voice
-      const voices = window.speechSynthesis.getVoices();
-      const ptVoice = voices.find((v) => v.lang.startsWith('pt') || v.lang.includes('BR'));
-      if (ptVoice) {
-        utterance.voice = ptVoice;
-      }
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: 'Zephyr',
+            },
+          },
+        },
+      },
+    });
 
-      utterance.onend = () => resolve();
-      utterance.onerror = () => resolve();
+    const inlineData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData;
 
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      resolve();
+    if (!inlineData?.data) {
+      return NextResponse.json({ error: 'Falha ao gerar áudio' }, { status: 500 });
     }
-  });
-};
+
+    return NextResponse.json({
+      audioBase64: inlineData.data,
+      mimeType: inlineData.mimeType || 'audio/pcm;rate=24000',
+    });
+  } catch (error) {
+    console.error('Erro no Gemini TTS:', error);
+    return NextResponse.json({ error: 'Erro interno ao gerar voz' }, { status: 500 });
+  }
+}
