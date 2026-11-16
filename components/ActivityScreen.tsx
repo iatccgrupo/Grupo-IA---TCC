@@ -3,9 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import { Volume2, Sparkles, HelpCircle, ArrowLeft, RefreshCw } from 'lucide-react';
 import { ActivityQuestion, ActivityOption, Phase, ChildProfile } from '@/lib/types';
-import { AVATAR_OPTIONS } from '@/lib/game-data';
+import { AVATAR_OPTIONS, validateActivityQuestion } from '@/lib/game-data';
 import { speakInPortuguese, playPopSound } from '@/lib/sound';
 import { isPhonemeAnswerCorrect, normalizePhonemeString } from '@/lib/utils';
+import { Phase3IguanaActivity } from '@/components/Phase3IguanaActivity';
 
 interface ActivityScreenProps {
   question: ActivityQuestion;
@@ -29,6 +30,12 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
   const [showHint, setShowHint] = useState(false);
 
   const avatarObj = AVATAR_OPTIONS.find((a) => a.id === childProfile.avatarId) || AVATAR_OPTIONS[0];
+  const isPhase3Iguana = currentPhase.id === 'fase-3' || question.phaseId === 'fase-3';
+
+  // Validação em tempo de execução para garantir que a letra-alvo exista nas opções
+  useEffect(() => {
+    validateActivityQuestion(question);
+  }, [question]);
 
   const handlePlayPromptAudio = React.useCallback(async () => {
     setIsPlayingAudio(true);
@@ -37,8 +44,9 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
     setIsPlayingAudio(false);
   }, [question.spokenPrompt]);
 
-  // Play audio on question load
+  // Play audio on question load (apenas para fases fora da Fase 3, que já gerencia sua própria narração)
   useEffect(() => {
+    if (isPhase3Iguana) return;
     let active = true;
     if (soundEnabled) {
       const timer = setTimeout(() => {
@@ -51,7 +59,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
         clearTimeout(timer);
       };
     }
-  }, [question.id, soundEnabled, handlePlayPromptAudio]);
+  }, [question.id, soundEnabled, isPhase3Iguana, handlePlayPromptAudio]);
 
   const handleSelect = React.useCallback(
     (option: ActivityOption) => {
@@ -75,6 +83,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
 
   // Support keyboard input (accepting 'a', 'á', 'A', 'Á', etc.)
   useEffect(() => {
+    if (isPhase3Iguana) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (selectedOptionId || event.metaKey || event.ctrlKey || event.altKey) return;
       const normalizedKey = normalizePhonemeString(event.key);
@@ -96,7 +105,21 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [question.options, question.targetLetter, selectedOptionId, handleSelect]);
+  }, [isPhase3Iguana, question.options, question.targetLetter, selectedOptionId, handleSelect]);
+
+  // Fase 3 dedicada exclusivamente à Vogal "I" — I de Iguana
+  if (isPhase3Iguana) {
+    return (
+      <Phase3IguanaActivity
+        question={question}
+        currentPhase={currentPhase}
+        childProfile={childProfile}
+        soundEnabled={soundEnabled}
+        onAnswerSelected={onAnswerSelected}
+        onBackToMap={onBackToMap}
+      />
+    );
+  }
 
   return (
     <div className="relative mx-auto max-w-4xl px-4 py-6 sm:py-8">
@@ -150,10 +173,11 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
             <span>Desafio: Ouça e encontre a letra certa!</span>
           </div>
           <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 font-display">
-            Toque no som para escutar a letrinha
+            {question.spokenPrompt}
           </h2>
           <p className="mt-2 text-sm sm:text-base text-slate-600 max-w-md mx-auto">
-            Qual dos cards abaixo tem a letrinha chamada pelo nosso companheiro?
+            Toque no botão de áudio e escolha o card correspondente à letra{' '}
+            <strong className="text-blue-700">{question.targetLetter}</strong> ({question.targetWord}).
           </p>
         </div>
 

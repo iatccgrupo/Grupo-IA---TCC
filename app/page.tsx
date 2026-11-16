@@ -8,24 +8,24 @@ import { ActivityScreen } from '@/components/ActivityScreen';
 import { FeedbackScreen } from '@/components/FeedbackScreen';
 import { ProgressScreen } from '@/components/ProgressScreen';
 import { ParentDashboard, ParentalGateModal } from '@/components/ParentDashboard';
-import { StorybookScreen } from '@/components/StorybookScreen';
 import {
   ScreenState,
   ChildProfile,
   LevelInfo,
   Phase,
-  ActivityQuestion,
   ActivityOption,
   Medal,
-  Storybook,
 } from '@/lib/types';
-import { INITIAL_LEVELS, ACTIVITY_QUESTIONS, INITIAL_MEDALS } from '@/lib/game-data';
+import {
+  INITIAL_LEVELS,
+  INITIAL_MEDALS,
+  getQuestionByPhaseId,
+} from '@/lib/game-data';
 import { playPopSound, playSuccessSound } from '@/lib/sound';
 import {
   savePhaseProgressToSupabase,
   saveMedalToSupabase,
   logActivityToSupabase,
-  saveBookCompletionToSupabase,
   getActiveSessionWorkspace,
   signOutWithSupabase,
   RestoredWorkspace,
@@ -49,19 +49,34 @@ export default function HomePage() {
   const [currentPhase, setCurrentPhase] = useState<Phase>(INITIAL_LEVELS[0].phases[2]); // Phase 3 (Vogal I) default current
 
   // Activity & Feedback State
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [lastSelectedOption, setLastSelectedOption] = useState<ActivityOption | null>(null);
   const [isAnswerCorrect, setIsAnswerCorrect] = useState(false);
 
   // Medals & Gamification
   const [medals, setMedals] = useState<Medal[]>(INITIAL_MEDALS);
 
-  // Storybook Library State
-  const [completedBookIds, setCompletedBookIds] = useState<string[]>([]);
-  const [customBooks, setCustomBooks] = useState<Storybook[]>([]);
-
   // Sound Control
   const [soundEnabled, setSoundEnabled] = useState(true);
+
+  const mergeLevelsWithTemplate = (savedLevels: LevelInfo[]): LevelInfo[] => {
+    const savedPhaseMap = new Map<string, Phase>();
+    savedLevels.forEach((lvl) => {
+      lvl.phases.forEach((p) => savedPhaseMap.set(p.id, p));
+    });
+
+    return INITIAL_LEVELS.map((lvl) => ({
+      ...lvl,
+      phases: lvl.phases.map((templatePhase) => {
+        const saved = savedPhaseMap.get(templatePhase.id);
+        if (!saved) return { ...templatePhase };
+        return {
+          ...templatePhase,
+          starsEarned: saved.starsEarned,
+          status: saved.status,
+        };
+      }),
+    }));
+  };
 
   // Restaurar cache local e sessão ativa do Supabase após hidratação
   useEffect(() => {
@@ -76,12 +91,6 @@ export default function HomePage() {
         const savedChild = localStorage.getItem('aventura_child_profile');
         const savedLevels = localStorage.getItem('aventura_levels');
         const savedMedals = localStorage.getItem('aventura_medals');
-        const savedCompletedBooks = localStorage.getItem('aventura_completed_books');
-        const savedCustomBooks = localStorage.getItem('aventura_custom_books');
-
-        if (savedCustomBooks) {
-          setCustomBooks(JSON.parse(savedCustomBooks) as Storybook[]);
-        }
 
         if (savedParent) {
           const parsedParent = JSON.parse(savedParent) as { id?: string };
@@ -96,8 +105,9 @@ export default function HomePage() {
 
           if (savedLevels) {
             const parsedLevels = JSON.parse(savedLevels) as LevelInfo[];
-            setLevels(parsedLevels);
-            const flat = parsedLevels.flatMap((lvl) => lvl.phases);
+            const mergedLevels = mergeLevelsWithTemplate(parsedLevels);
+            setLevels(mergedLevels);
+            const flat = mergedLevels.flatMap((lvl) => lvl.phases);
             const nextActive =
               flat.find((p) => p.status === 'current') ||
               flat.find((p) => p.status !== 'completed') ||
@@ -109,10 +119,6 @@ export default function HomePage() {
 
           if (savedMedals) {
             setMedals(JSON.parse(savedMedals) as Medal[]);
-          }
-
-          if (savedCompletedBooks) {
-            setCompletedBookIds(JSON.parse(savedCompletedBooks) as string[]);
           }
         }
       } catch {}
@@ -138,7 +144,6 @@ export default function HomePage() {
         setChildProfile(sessionData.workspace.child);
         setLevels(sessionData.workspace.levels);
         setMedals(sessionData.workspace.medals);
-        setCompletedBookIds(sessionData.workspace.completedBookIds);
 
         const flatPhases = sessionData.workspace.levels.flatMap((lvl) => lvl.phases);
         const activePhase =
@@ -162,10 +167,6 @@ export default function HomePage() {
             'aventura_medals',
             JSON.stringify(sessionData.workspace.medals)
           );
-          localStorage.setItem(
-            'aventura_completed_books',
-            JSON.stringify(sessionData.workspace.completedBookIds)
-          );
         } catch {}
 
         setCurrentScreen((prev) => (prev === 'auth' ? 'map' : prev));
@@ -179,12 +180,10 @@ export default function HomePage() {
     };
   }, []);
 
-  // Calculate total stars (trilha de fases + livros concluídos)
-  const totalStars =
-    levels.reduce((acc, lvl) => {
-      return acc + lvl.phases.reduce((pAcc, p) => pAcc + p.starsEarned, 0);
-    }, 0) +
-    completedBookIds.length * 3;
+  // Calculate total stars
+  const totalStars = levels.reduce((acc, lvl) => {
+    return acc + lvl.phases.reduce((pAcc, p) => pAcc + p.starsEarned, 0);
+  }, 0);
 
   // Calculate completed phases
   const completedPhasesCount = levels.reduce((acc, lvl) => {
@@ -208,7 +207,6 @@ export default function HomePage() {
     if (restoredWorkspace) {
       setLevels(restoredWorkspace.levels);
       setMedals(restoredWorkspace.medals);
-      setCompletedBookIds(restoredWorkspace.completedBookIds);
 
       const flatPhases = restoredWorkspace.levels.flatMap((lvl) => lvl.phases);
       const activePhase =
@@ -228,29 +226,21 @@ export default function HomePage() {
           'aventura_medals',
           JSON.stringify(restoredWorkspace.medals)
         );
-        localStorage.setItem(
-          'aventura_completed_books',
-          JSON.stringify(restoredWorkspace.completedBookIds)
-        );
       } catch {}
     }
 
     setCurrentScreen('map');
   };
 
-  // Start a specific phase
+  // Start a specific phase (fonte única: phase.id)
   const handleSelectPhase = (phase: Phase) => {
     setCurrentPhase(phase);
-    // Find matching question for this phase or fallback to question 0
-    const qIndex = ACTIVITY_QUESTIONS.findIndex((q) => q.phaseId === phase.id);
-    setCurrentQuestionIndex(qIndex >= 0 ? qIndex : 0);
     setCurrentScreen('activity');
   };
 
   // Handle Answer Selection in Activity Screen
   const handleAnswerSelected = (option: ActivityOption) => {
-    const isCorrect =
-      isPhonemeAnswerCorrect(option.letter, currentQuestion.targetLetter) || option.isCorrect;
+    const isCorrect = isPhonemeAnswerCorrect(option.letter, currentQuestion.targetLetter);
 
     setLastSelectedOption({ ...option, isCorrect });
     setIsAnswerCorrect(isCorrect);
@@ -324,43 +314,62 @@ export default function HomePage() {
         localStorage.setItem('aventura_levels', JSON.stringify(updatedLevels));
       } catch {}
 
+      const unlockedLevel2 =
+        currentPhase.id === 'fase-5' ||
+        (unlockedNextPhase !== null && (unlockedNextPhase as Phase).levelId === 2);
+      const completedFinalChallenge = currentPhase.id === 'fase-12';
+
       // Sincronizar medalhas desbloqueadas com Supabase
       if (childProfile) {
         saveMedalToSupabase(childProfile.id, 'm4');
+        if (unlockedLevel2) {
+          saveMedalToSupabase(childProfile.id, 'm5');
+        }
         if (totalStars + 3 >= 15) {
           saveMedalToSupabase(childProfile.id, 'm6');
+        }
+        if (completedFinalChallenge) {
+          saveMedalToSupabase(childProfile.id, 'm8');
         }
       }
 
       // Unlock medals if criteria met
-      setMedals((prevMedals) =>
-        prevMedals.map((m) => {
+      setMedals((prevMedals) => {
+        const nextMedals = prevMedals.map((m) => {
           if (m.id === 'm4' && !m.unlocked) {
-            // Mira Certeira
+            return { ...m, unlocked: true, unlockedDate: 'Hoje' };
+          }
+          if (m.id === 'm5' && unlockedLevel2 && !m.unlocked) {
             return { ...m, unlocked: true, unlockedDate: 'Hoje' };
           }
           if (m.id === 'm6' && totalStars + 3 >= 15 && !m.unlocked) {
-            // Colecionador de estrelas
+            return { ...m, unlocked: true, unlockedDate: 'Hoje' };
+          }
+          if (m.id === 'm8' && completedFinalChallenge && !m.unlocked) {
             return { ...m, unlocked: true, unlockedDate: 'Hoje' };
           }
           return m;
-        })
-      );
+        });
+
+        try {
+          localStorage.setItem('aventura_medals', JSON.stringify(nextMedals));
+        } catch {}
+
+        return nextMedals;
+      });
     }
 
     setCurrentScreen('feedback');
   };
 
-  // Progress to next question or phase
+  // Progress sequentially to next phase in trail order (Fase 1 -> 2 -> 3 -> 4 -> 5 -> ...)
   const handleNextQuestion = () => {
-    const nextIdx = (currentQuestionIndex + 1) % ACTIVITY_QUESTIONS.length;
-    setCurrentQuestionIndex(nextIdx);
-    const nextQ = ACTIVITY_QUESTIONS[nextIdx];
-
-    // Find phase for nextQ if exists
-    const matchingPhase = levels.flatMap((lvl) => lvl.phases).find((p) => p.id === nextQ.phaseId);
-    if (matchingPhase) {
-      setCurrentPhase(matchingPhase);
+    const allPhases = levels.flatMap((lvl) => lvl.phases);
+    const currentIndex = allPhases.findIndex((p) => p.id === currentPhase.id);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % allPhases.length : 0;
+    const nextPhase = allPhases[nextIndex];
+    if (nextPhase) {
+      setCurrentPhase(nextPhase);
     }
 
     setCurrentScreen('activity');
@@ -371,82 +380,13 @@ export default function HomePage() {
     setCurrentScreen('activity');
   };
 
-  // Adicionar nova história gerada pelo Gemini na biblioteca local
-  const handleAddCustomBook = (book: Storybook) => {
-    setCustomBooks((prev) => {
-      const next = [book, ...prev];
-      try {
-        localStorage.setItem('aventura_custom_books', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-  };
-
-  // Concluir leitura de um livro: salva estrelas, medalhas de leitura (m9/m10) e sincroniza Supabase
-  const handleCompleteBook = (book: Storybook) => {
-    const alreadyCompleted = completedBookIds.includes(book.id);
-    const nextCompleted = alreadyCompleted
-      ? completedBookIds
-      : [...completedBookIds, book.id];
-
-    if (!alreadyCompleted) {
-      setCompletedBookIds(nextCompleted);
-      try {
-        localStorage.setItem(
-          'aventura_completed_books',
-          JSON.stringify(nextCompleted)
-        );
-      } catch {}
-    }
-
-    const phaseStars = levels.reduce(
-      (acc, lvl) => acc + lvl.phases.reduce((pAcc, p) => pAcc + p.starsEarned, 0),
-      0
-    );
-    const nextTotalStars = phaseStars + nextCompleted.length * 3;
-    const unlockGuardian = nextCompleted.length >= 3;
-    const unlockStarCollector = nextTotalStars >= 15;
-
-    if (childProfile) {
-      void saveBookCompletionToSupabase(childProfile.id, book);
-      void saveMedalToSupabase(childProfile.id, 'm9');
-      if (unlockGuardian) {
-        void saveMedalToSupabase(childProfile.id, 'm10');
-      }
-      if (unlockStarCollector) {
-        void saveMedalToSupabase(childProfile.id, 'm6');
-      }
-    }
-
-    setMedals((prevMedals) => {
-      const nextMedals = prevMedals.map((m) => {
-        if (m.id === 'm9' && !m.unlocked) {
-          return { ...m, unlocked: true, unlockedDate: 'Hoje' };
-        }
-        if (m.id === 'm10' && unlockGuardian && !m.unlocked) {
-          return { ...m, unlocked: true, unlockedDate: 'Hoje' };
-        }
-        if (m.id === 'm6' && unlockStarCollector && !m.unlocked) {
-          return { ...m, unlocked: true, unlockedDate: 'Hoje' };
-        }
-        return m;
-      });
-      try {
-        localStorage.setItem('aventura_medals', JSON.stringify(nextMedals));
-      } catch {}
-      return nextMedals;
-    });
-  };
-
   // Reset entire game progress
   const handleResetProgress = () => {
     setLevels(INITIAL_LEVELS);
     setMedals(INITIAL_MEDALS);
-    setCompletedBookIds([]);
     try {
       localStorage.removeItem('aventura_levels');
       localStorage.removeItem('aventura_medals');
-      localStorage.removeItem('aventura_completed_books');
     } catch {}
     playSuccessSound();
   };
@@ -459,20 +399,18 @@ export default function HomePage() {
     setActiveParentId('');
     setLevels(INITIAL_LEVELS);
     setMedals(INITIAL_MEDALS);
-    setCompletedBookIds([]);
     setCurrentPhase(INITIAL_LEVELS[0].phases[2]);
     try {
       localStorage.removeItem('aventura_child_profile');
       localStorage.removeItem('aventura_parent_account');
       localStorage.removeItem('aventura_levels');
       localStorage.removeItem('aventura_medals');
-      localStorage.removeItem('aventura_completed_books');
     } catch {}
     setCurrentScreen('auth');
     playPopSound();
   };
 
-  const currentQuestion = ACTIVITY_QUESTIONS[currentQuestionIndex] || ACTIVITY_QUESTIONS[0];
+  const currentQuestion = getQuestionByPhaseId(currentPhase.id);
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f8f9ff]">
@@ -530,6 +468,7 @@ export default function HomePage() {
 
         {currentScreen === 'activity' && childProfile && (
           <ActivityScreen
+            key={currentQuestion.id}
             question={currentQuestion}
             currentPhase={currentPhase}
             childProfile={childProfile}
@@ -549,19 +488,6 @@ export default function HomePage() {
             onNextQuestion={handleNextQuestion}
             onRetryQuestion={handleRetryQuestion}
             onBackToMap={() => setCurrentScreen('map')}
-          />
-        )}
-
-        {currentScreen === 'library' && (
-          <StorybookScreen
-            childProfile={childProfile}
-            soundEnabled={soundEnabled}
-            completedBookIds={completedBookIds}
-            customBooks={customBooks}
-            onAddCustomBook={handleAddCustomBook}
-            onCompleteBook={handleCompleteBook}
-            onNavigateProgress={() => setCurrentScreen(childProfile ? 'progress' : 'auth')}
-            onNavigateMap={() => setCurrentScreen(childProfile ? 'map' : 'auth')}
           />
         )}
 
