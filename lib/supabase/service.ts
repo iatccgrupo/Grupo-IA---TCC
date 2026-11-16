@@ -1,5 +1,6 @@
 import { getSupabaseClient, isSupabaseConfigured } from './client';
 import { ChildProfile, LevelInfo, Medal } from '../types';
+import { INITIAL_LEVELS, INITIAL_MEDALS } from '../game-data';
 import { isPhonemeAnswerCorrect } from '../utils';
 
 export interface AuthResult {
@@ -14,6 +15,33 @@ export interface AuthResult {
 export interface ServiceResult {
   success: boolean;
   error?: string;
+}
+
+export interface ChildSaveResult extends ServiceResult {
+  child?: ChildProfile;
+}
+
+export interface RestoredWorkspace {
+  child: ChildProfile | null;
+  levels: LevelInfo[];
+  medals: Medal[];
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: string): boolean {
+  return UUID_REGEX.test(value);
+}
+
+function cloneInitialLevels(): LevelInfo[] {
+  return INITIAL_LEVELS.map((lvl) => ({
+    ...lvl,
+    phases: lvl.phases.map((p) => ({ ...p })),
+  }));
+}
+
+function cloneInitialMedals(): Medal[] {
+  return INITIAL_MEDALS.map((m) => ({ ...m }));
 }
 
 function translateSupabaseError(rawMessage: string, code?: string): string {
@@ -299,11 +327,11 @@ export async function signOutWithSupabase(): Promise<void> {
   }
 }
 
-// 4. Salvar ou Sincronizar Perfil da Criança
+// 4. Salvar ou Sincronizar Perfil da Criança (retorna o registro com UUID real do Supabase)
 export async function saveChildProfileWithResultToSupabase(
   child: ChildProfile,
   parentId?: string
-): Promise<ServiceResult> {
+): Promise<ChildSaveResult> {
   const supabase = getSupabaseClient();
   if (!supabase || !parentId) {
     return {
@@ -313,18 +341,30 @@ export async function saveChildProfileWithResultToSupabase(
   }
 
   try {
-    const { error } = await supabase.from('children').upsert(
-      {
-        id: child.id.startsWith('child-') ? undefined : child.id,
-        parent_id: parentId,
-        name: child.name,
-        avatar_id: child.avatarId,
-        avatar_custom_url: child.avatarCustomUrl || null,
-        age_group: child.ageGroup,
-        updated_at: new Date().toISOString(),
-      } as any,
-      { onConflict: 'id' }
-    );
+    const hasValidUuid = isUuid(child.id);
+    const payload = {
+      ...(hasValidUuid ? { id: child.id } : {}),
+      parent_id: parentId,
+      name: child.name.trim(),
+      avatar_id: child.avatarId,
+      avatar_custom_url: child.avatarCustomUrl || null,
+      age_group: child.ageGroup,
+      updated_at: new Date().toISOString(),
+    };
+
+    const query = hasValidUuid
+      ? supabase
+          .from('children')
+          .upsert(payload as any, { onConflict: 'id' })
+          .select('id, name, avatar_id, avatar_custom_url, age_group, created_at')
+          .single()
+      : supabase
+          .from('children')
+          .insert(payload as any)
+          .select('id, name, avatar_id, avatar_custom_url, age_group, created_at')
+          .single();
+
+    const { data, error } = await query;
 
     if (error) {
       return {
@@ -333,7 +373,29 @@ export async function saveChildProfileWithResultToSupabase(
       };
     }
 
-    return { success: true };
+    const row = data as {
+      id: string;
+      name: string;
+      avatar_id: string;
+      avatar_custom_url: string | null;
+      age_group: string;
+      created_at: string;
+    } | null;
+
+    const savedChild: ChildProfile = row
+      ? {
+          id: row.id,
+          name: row.name,
+          avatarId: row.avatar_id,
+          avatarCustomUrl: row.avatar_custom_url || undefined,
+          ageGroup: row.age_group,
+          createdAt: row.created_at
+            ? new Date(row.created_at).toLocaleDateString('pt-BR')
+            : child.createdAt,
+        }
+      : child;
+
+    return { success: true, child: savedChild };
   } catch (err: unknown) {
     const raw = err instanceof Error ? err.message : 'Falha ao salvar perfil da criança.';
     return { success: false, error: translateSupabaseError(raw) };
@@ -348,6 +410,193 @@ export async function saveChildProfileToSupabase(
   return result.success;
 }
 
+// 4b. Carregar Perfil da Criança + Etapas Concluídas + Medalhas do Supabase
+export async function loadChildWorkspaceFromSupabase(
+  parentId: string
+): Promise<RestoredWorkspace> {
+  const emptyWorkspace: RestoredWorkspace = {
+    child: null,
+    levels: cloneInitialLevels(),
+    medals: cloneInitialMedals(),
+  };
+
+  const supabase = getSupabaseClient();
+  if (!supabase || !isUuid(parentId)) {
+    return emptyWorkspace;
+  }
+
+  try {
+    const { data: childrenRows, error: childError } = await supabase
+      .from('children')
+      .select('id, name, avatar_id, avatar_custom_url, age_group, created_at')
+      .eq('parent_id', parentId)
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    if (childError || !childrenRows || childrenRows.length === 0) {
+      return emptyWorkspace;
+    }
+
+    const row = childrenRows[0] as {
+      id: string;
+      name: string;
+      avatar_id: string;
+      avatar_custom_url: string | null;
+      age_group: string;
+      created_at: string;
+    };
+
+    const child: ChildProfile = {
+      id: row.id,
+      name: row.name,
+      avatarId: row.avatar_id,
+      avatarCustomUrl: row.avatar_custom_url || undefined,
+      ageGroup: row.age_group,
+      createdAt: row.created_at
+        ? new Date(row.created_at).toLocaleDateString('pt-BR')
+        : new Date().toLocaleDateString('pt-BR'),
+    };
+
+    const [{ data: progressRows }, { data: medalRows }] = await Promise.all([
+      supabase
+        .from('game_progress')
+        .select('phase_id, stars_earned, status')
+        .eq('child_id', row.id),
+      supabase
+        .from('medals_unlocked')
+        .select('medal_id, unlocked_at')
+        .eq('child_id', row.id),
+    ]);
+
+    const mergedLevels = cloneInitialLevels();
+    const typedProgress = (progressRows || []) as Array<{
+      phase_id: string;
+      stars_earned: number;
+      status: 'completed' | 'current' | 'locked';
+    }>;
+
+    if (typedProgress.length > 0) {
+      const progressMap = new Map(typedProgress.map((p) => [p.phase_id, p]));
+      const flatPhases = mergedLevels.flatMap((lvl) => lvl.phases);
+
+      flatPhases.forEach((phase) => {
+        const saved = progressMap.get(phase.id);
+        if (saved) {
+          phase.starsEarned = saved.stars_earned;
+          phase.status = saved.status;
+        }
+      });
+
+      // Garante que a fase seguinte à última concluída fique desbloqueada ('current')
+      let lastCompletedIdx = -1;
+      flatPhases.forEach((p, idx) => {
+        if (p.status === 'completed') lastCompletedIdx = idx;
+      });
+      const hasCurrent = flatPhases.some((p) => p.status === 'current');
+      if (!hasCurrent && lastCompletedIdx >= 0 && lastCompletedIdx + 1 < flatPhases.length) {
+        if (flatPhases[lastCompletedIdx + 1].status === 'locked') {
+          flatPhases[lastCompletedIdx + 1].status = 'current';
+        }
+      }
+    }
+
+    const mergedMedals = cloneInitialMedals();
+    const typedMedals = (medalRows || []) as Array<{
+      medal_id: string;
+      unlocked_at: string;
+    }>;
+
+    if (typedMedals.length > 0) {
+      const medalMap = new Map(typedMedals.map((m) => [m.medal_id, m.unlocked_at]));
+      mergedMedals.forEach((medal) => {
+        const unlockedAt = medalMap.get(medal.id);
+        if (unlockedAt) {
+          medal.unlocked = true;
+          medal.unlockedDate = new Date(unlockedAt).toLocaleDateString('pt-BR');
+        }
+      });
+    }
+
+    return {
+      child,
+      levels: mergedLevels,
+      medals: mergedMedals,
+    };
+  } catch {
+    return emptyWorkspace;
+  }
+}
+
+// 4c. Restaurar sessão ativa e progresso salvo do Supabase (útil ao recarregar a página)
+export async function getActiveSessionWorkspace(): Promise<{
+  userId: string;
+  email: string;
+  name: string;
+  workspace: RestoredWorkspace;
+} | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase || !isSupabaseConfigured()) {
+    return null;
+  }
+
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session?.user) {
+      return null;
+    }
+
+    const workspace = await loadChildWorkspaceFromSupabase(session.user.id);
+    const fullName =
+      (typeof session.user.user_metadata?.full_name === 'string' &&
+        session.user.user_metadata.full_name.trim()) ||
+      'Responsável';
+
+    return {
+      userId: session.user.id,
+      email: session.user.email || '',
+      name: fullName,
+      workspace,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// 4d. Sincronizar fases iniciais da trilha ao criar novo perfil da criança
+export async function saveInitialProgressForChildToSupabase(
+  childId: string,
+  levels: LevelInfo[]
+): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase || !isUuid(childId)) return;
+
+  try {
+    const rowsToInsert = levels
+      .flatMap((lvl) => lvl.phases)
+      .filter((phase) => phase.status !== 'locked')
+      .map((phase) => ({
+        child_id: childId,
+        phase_id: phase.id,
+        level_id: phase.levelId,
+        stars_earned: phase.starsEarned,
+        status: phase.status,
+        completed_at: phase.status === 'completed' ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString(),
+      }));
+
+    if (rowsToInsert.length === 0) return;
+
+    await supabase
+      .from('game_progress')
+      .upsert(rowsToInsert as any, { onConflict: 'child_id,phase_id' });
+  } catch {
+    // Ignore sync errors
+  }
+}
+
 // 5. Salvar Progresso de Fase no Supabase
 export async function savePhaseProgressToSupabase(
   childId: string,
@@ -357,7 +606,7 @@ export async function savePhaseProgressToSupabase(
   status: 'completed' | 'current' | 'locked'
 ): Promise<boolean> {
   const supabase = getSupabaseClient();
-  if (!supabase) return false;
+  if (!supabase || !isUuid(childId)) return false;
 
   try {
     const { error } = await supabase.from('game_progress').upsert(
@@ -385,7 +634,7 @@ export async function saveMedalToSupabase(
   medalId: string
 ): Promise<boolean> {
   const supabase = getSupabaseClient();
-  if (!supabase) return false;
+  if (!supabase || !isUuid(childId)) return false;
 
   try {
     const { error } = await supabase.from('medals_unlocked').upsert(
@@ -415,7 +664,7 @@ export async function logActivityToSupabase(params: {
   timeSpentSeconds?: number;
 }): Promise<boolean> {
   const supabase = getSupabaseClient();
-  if (!supabase) return false;
+  if (!supabase || !isUuid(params.childId)) return false;
 
   try {
     const normalizedMatch = isPhonemeAnswerCorrect(

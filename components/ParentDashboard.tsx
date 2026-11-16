@@ -432,8 +432,8 @@ export const ParentalGateModal: React.FC<{
   onClose: () => void;
   onSuccess: () => void;
 }> = ({ isOpen, onClose, onSuccess }) => {
-  const [num1] = useState(() => Math.floor(Math.random() * 6) + 4);
-  const [num2] = useState(() => Math.floor(Math.random() * 5) + 3);
+  const [num1, setNum1] = useState(7);
+  const [num2, setNum2] = useState(5);
   const [userAnswer, setUserAnswer] = useState('');
   const [hasError, setHasError] = useState(false);
 
@@ -445,6 +445,10 @@ export const ParentalGateModal: React.FC<{
     e.preventDefault();
     if (parseInt(userAnswer.trim(), 10) === expectedAnswer) {
       playSuccessSound();
+      setUserAnswer('');
+      setHasError(false);
+      setNum1(Math.floor(Math.random() * 6) + 4);
+      setNum2(Math.floor(Math.random() * 5) + 3);
       onSuccess();
       onClose();
     } else {
