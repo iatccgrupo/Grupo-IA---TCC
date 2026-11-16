@@ -24,6 +24,7 @@ import {
   saveMedalToSupabase,
   logActivityToSupabase,
 } from '@/lib/supabase/service';
+import { isPhonemeAnswerCorrect } from '@/lib/utils';
 
 export default function HomePage() {
   // Child Profile State with lazy initialization
@@ -106,7 +107,12 @@ export default function HomePage() {
 
   // Handle Answer Selection in Activity Screen
   const handleAnswerSelected = (option: ActivityOption) => {
-    setLastSelectedOption(option);
+    const isCorrect =
+      isPhonemeAnswerCorrect(option.letter, currentQuestion.targetLetter) || option.isCorrect;
+
+    setLastSelectedOption({ ...option, isCorrect });
+    setIsAnswerCorrect(isCorrect);
+
     // Sincronizar log de atividade com Supabase
     if (childProfile) {
       logActivityToSupabase({
@@ -116,11 +122,11 @@ export default function HomePage() {
         targetLetter: currentQuestion.targetLetter,
         targetWord: currentQuestion.targetWord,
         chosenOptionLetter: option.letter,
-        isCorrect: option.isCorrect,
+        isCorrect,
       });
     }
 
-    if (option.isCorrect) {
+    if (isCorrect) {
       // Sincronizar fase concluída no Supabase
       if (childProfile) {
         savePhaseProgressToSupabase(

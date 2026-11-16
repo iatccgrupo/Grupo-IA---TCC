@@ -5,6 +5,7 @@ import { Volume2, Sparkles, HelpCircle, ArrowLeft, RefreshCw } from 'lucide-reac
 import { ActivityQuestion, ActivityOption, Phase, ChildProfile } from '@/lib/types';
 import { AVATAR_OPTIONS } from '@/lib/game-data';
 import { speakInPortuguese, playPopSound } from '@/lib/sound';
+import { isPhonemeAnswerCorrect, normalizePhonemeString } from '@/lib/utils';
 
 interface ActivityScreenProps {
   question: ActivityQuestion;
@@ -52,14 +53,50 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
     }
   }, [question.id, soundEnabled, handlePlayPromptAudio]);
 
-  const handleSelect = (option: ActivityOption) => {
-    playPopSound();
-    setSelectedOptionId(option.id);
-    // Give tactile feedback delay
-    setTimeout(() => {
-      onAnswerSelected(option);
-    }, 280);
-  };
+  const handleSelect = React.useCallback(
+    (option: ActivityOption) => {
+      if (selectedOptionId) return;
+      playPopSound();
+      setSelectedOptionId(option.id);
+
+      const validatedIsCorrect =
+        isPhonemeAnswerCorrect(option.letter, question.targetLetter) || option.isCorrect;
+
+      // Give tactile feedback delay
+      setTimeout(() => {
+        onAnswerSelected({
+          ...option,
+          isCorrect: validatedIsCorrect,
+        });
+      }, 280);
+    },
+    [selectedOptionId, question.targetLetter, onAnswerSelected]
+  );
+
+  // Support keyboard input (accepting 'a', 'á', 'A', 'Á', etc.)
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (selectedOptionId || event.metaKey || event.ctrlKey || event.altKey) return;
+      const normalizedKey = normalizePhonemeString(event.key);
+      if (!normalizedKey || normalizedKey.length !== 1) return;
+
+      const matchedOption = question.options.find(
+        (opt) => normalizePhonemeString(opt.letter) === normalizedKey
+      );
+      if (matchedOption) {
+        handleSelect({
+          ...matchedOption,
+          isCorrect:
+            isPhonemeAnswerCorrect(event.key, question.targetLetter) ||
+            isPhonemeAnswerCorrect(matchedOption.letter, question.targetLetter) ||
+            matchedOption.isCorrect,
+        });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [question.options, question.targetLetter, selectedOptionId, handleSelect]);
 
   return (
     <div className="relative mx-auto max-w-4xl px-4 py-6 sm:py-8">

@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   UserCheck,
+  AlertCircle,
 } from 'lucide-react';
 import { ChildProfile } from '@/lib/types';
 import { AVATAR_OPTIONS } from '@/lib/game-data';
@@ -23,7 +24,7 @@ import { playPopSound, playSuccessSound } from '@/lib/sound';
 import {
   signUpWithSupabase,
   signInWithSupabase,
-  saveChildProfileToSupabase,
+  saveChildProfileWithResultToSupabase,
 } from '@/lib/supabase/service';
 import { isSupabaseConfigured } from '@/lib/supabase/client';
 
@@ -56,6 +57,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
   const [customPhotoUrl, setCustomPhotoUrl] = useState<string | null>(null);
   const [ageGroup, setAgeGroup] = useState('5 a 6 anos (1º Ano)');
   const [nameError, setNameError] = useState('');
+  const [childProfileError, setChildProfileError] = useState('');
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -73,13 +75,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
     e.preventDefault();
     setAuthError('');
 
-    if (!parentEmail.trim() || !parentEmail.includes('@')) {
+    const cleanName = parentName.trim();
+    const cleanEmail = parentEmail.trim();
+
+    if (mode === 'register' && !cleanName) {
+      setAuthError('Por favor, informe o nome do responsável ou educador.');
+      return;
+    }
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
       setAuthError('Por favor, informe um e-mail válido para o login.');
       return;
     }
 
-    if (parentPassword.length < 4) {
-      setAuthError('A senha deve conter no mínimo 4 caracteres.');
+    if (parentPassword.length < 6) {
+      setAuthError('A senha deve conter no mínimo 6 caracteres.');
+      return;
+    }
+
+    if (mode === 'register' && confirmPassword.length < 6) {
+      setAuthError('A confirmação da senha deve conter no mínimo 6 caracteres.');
       return;
     }
 
@@ -91,33 +106,42 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
     setIsSubmitting(true);
 
     try {
+      let resolvedName = cleanName || 'Responsável';
+
       if (mode === 'register') {
         const result = await signUpWithSupabase(
-          parentName || 'Responsável',
-          parentEmail.trim(),
+          cleanName,
+          cleanEmail,
           parentPassword
         );
 
         if (!result.success) {
-          setAuthError(result.error || 'Erro ao realizar cadastro.');
-          setIsSubmitting(false);
+          setAuthError(
+            result.error ||
+              'Erro ao enviar cadastro para o Supabase. Verifique sua conexão e configuração.'
+          );
           return;
         }
 
         if (result.userId) {
           setParentId(result.userId);
         }
+        if (result.name) {
+          resolvedName = result.name;
+        }
       } else {
-        const result = await signInWithSupabase(parentEmail.trim(), parentPassword);
+        const result = await signInWithSupabase(cleanEmail, parentPassword);
 
         if (!result.success) {
           setAuthError(result.error || 'E-mail ou senha incorretos.');
-          setIsSubmitting(false);
           return;
         }
 
         if (result.userId) {
           setParentId(result.userId);
+        }
+        if (result.name) {
+          resolvedName = result.name;
         }
       }
 
@@ -128,8 +152,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
         localStorage.setItem(
           'aventura_parent_account',
           JSON.stringify({
-            name: parentName || 'Responsável',
-            email: parentEmail,
+            name: resolvedName,
+            email: cleanEmail,
             loggedAt: new Date().toISOString(),
           })
         );
@@ -149,6 +173,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
       } else {
         setStep('child_profile');
       }
+    } catch (err: unknown) {
+      const fallbackMessage =
+        err instanceof Error
+          ? err.message
+          : 'Erro inesperado de conexão ao autenticar no Supabase.';
+      setAuthError(fallbackMessage);
     } finally {
       setIsSubmitting(false);
     }
@@ -156,12 +186,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
 
   const handleCreateChildProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    setChildProfileError('');
     if (!childName.trim()) {
       setNameError('Por favor, digite o primeiro nome da criança!');
       return;
     }
     setNameError('');
-    playSuccessSound();
 
     const newProfile: ChildProfile = {
       id: 'child-' + Date.now(),
@@ -174,9 +204,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
 
     // Sincronizar com tabela children do Supabase se o parentId estiver ativo
     if (parentId) {
-      await saveChildProfileToSupabase(newProfile, parentId);
+      const saveResult = await saveChildProfileWithResultToSupabase(newProfile, parentId);
+      if (!saveResult.success) {
+        setChildProfileError(
+          saveResult.error ||
+            'Não foi possível salvar o perfil da criança no banco Supabase.'
+        );
+        return;
+      }
     }
 
+    playSuccessSound();
     onCompleteProfile(newProfile);
   };
 
@@ -360,7 +398,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
-                  placeholder="Mínimo 4 caracteres"
+                  minLength={6}
+                  placeholder="Mínimo 6 caracteres"
                   value={parentPassword}
                   onChange={(e) => {
                     setParentPassword(e.target.value);
@@ -368,6 +407,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
                   }}
                   className="w-full h-14 rounded-2xl border-3 border-amber-300 bg-amber-50/30 px-4 text-sm sm:text-base font-bold text-slate-800 placeholder-slate-400 focus:border-amber-500 focus:bg-white focus:outline-none transition-all shadow-inner"
                 />
+                <p className="mt-1.5 px-1 text-[11px] font-bold text-slate-600 flex items-center justify-between">
+                  <span>Mínimo 6 caracteres</span>
+                  <span
+                    className={
+                      parentPassword.length >= 6 ? 'text-emerald-600 font-black' : 'text-slate-400'
+                    }
+                  >
+                    {parentPassword.length}/6+
+                  </span>
+                </p>
               </div>
 
               {/* Confirm Password in Register mode */}
@@ -380,7 +429,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
-                    placeholder="Repita sua senha"
+                    minLength={6}
+                    placeholder="Mínimo 6 caracteres"
                     value={confirmPassword}
                     onChange={(e) => {
                       setConfirmPassword(e.target.value);
@@ -388,13 +438,35 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
                     }}
                     className="w-full h-14 rounded-2xl border-3 border-orange-300 bg-orange-50/30 px-4 text-sm sm:text-base font-bold text-slate-800 placeholder-slate-400 focus:border-orange-500 focus:bg-white focus:outline-none transition-all shadow-inner"
                   />
+                  <p className="mt-1.5 px-1 text-[11px] font-bold text-slate-600 flex items-center justify-between">
+                    <span>Mínimo 6 caracteres — repita a mesma senha</span>
+                    {confirmPassword.length > 0 && (
+                      <span
+                        className={
+                          confirmPassword.length >= 6 && confirmPassword === parentPassword
+                            ? 'text-emerald-600 font-black'
+                            : 'text-rose-600 font-black'
+                        }
+                      >
+                        {confirmPassword.length < 6
+                          ? 'Mínimo 6 caracteres'
+                          : confirmPassword === parentPassword
+                          ? 'Senhas conferem'
+                          : 'Senhas diferentes'}
+                      </span>
+                    )}
+                  </p>
                 </div>
               )}
 
               {/* Error Message */}
               {authError && (
-                <div className="rounded-2xl bg-red-100 p-3.5 border-2 border-red-300 text-xs font-black text-red-800 shadow-sm">
-                  {authError}
+                <div
+                  role="alert"
+                  className="rounded-2xl bg-red-50 p-4 border-2 border-red-400 text-xs sm:text-sm font-bold text-red-900 shadow-sm flex items-start gap-2.5"
+                >
+                  <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{authError}</span>
                 </div>
               )}
 
@@ -597,6 +669,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onCompleteProfile }) => 
                   )}
                 </div>
               </div>
+
+              {/* Child Profile Error Message */}
+              {childProfileError && (
+                <div
+                  role="alert"
+                  className="rounded-2xl bg-red-50 p-4 border-2 border-red-400 text-xs sm:text-sm font-bold text-red-900 shadow-sm flex items-start gap-2.5"
+                >
+                  <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{childProfileError}</span>
+                </div>
+              )}
 
               {/* Big Bubbly CTA Button */}
               <div className="pt-2">
