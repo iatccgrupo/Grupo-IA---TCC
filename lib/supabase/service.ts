@@ -1,5 +1,5 @@
 import { getSupabaseClient, isSupabaseConfigured } from './client';
-import { ChildProfile, LevelInfo, Medal } from '../types';
+import { ChildProfile, LevelInfo, Medal, Storybook } from '../types';
 import { INITIAL_LEVELS, INITIAL_MEDALS } from '../game-data';
 import { isPhonemeAnswerCorrect } from '../utils';
 
@@ -25,6 +25,7 @@ export interface RestoredWorkspace {
   child: ChildProfile | null;
   levels: LevelInfo[];
   medals: Medal[];
+  completedBookIds: string[];
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -418,6 +419,7 @@ export async function loadChildWorkspaceFromSupabase(
     child: null,
     levels: cloneInitialLevels(),
     medals: cloneInitialMedals(),
+    completedBookIds: [],
   };
 
   const supabase = getSupabaseClient();
@@ -517,10 +519,15 @@ export async function loadChildWorkspaceFromSupabase(
       });
     }
 
+    const completedBookIds = typedProgress
+      .filter((p) => p.phase_id.startsWith('book-') && p.status === 'completed')
+      .map((p) => p.phase_id.replace(/^book-/, ''));
+
     return {
       child,
       levels: mergedLevels,
       medals: mergedMedals,
+      completedBookIds,
     };
   } catch {
     return emptyWorkspace;
@@ -689,4 +696,35 @@ export async function logActivityToSupabase(params: {
   } catch {
     return false;
   }
+}
+
+// 8. Registrar Leitura Completa de Livro na Biblioteca de Histórias
+export async function saveBookCompletionToSupabase(
+  childId: string,
+  book: Storybook
+): Promise<boolean> {
+  const supabase = getSupabaseClient();
+  if (!supabase || !isUuid(childId)) return false;
+
+  const progressSaved = await savePhaseProgressToSupabase(
+    childId,
+    `book-${book.id}`,
+    1,
+    3,
+    'completed'
+  );
+
+  const firstPage = book.pages[0];
+  await logActivityToSupabase({
+    childId,
+    phaseId: `book-${book.id}`,
+    questionId: 'storybook-read',
+    targetLetter: firstPage?.highlightLetter || 'L',
+    targetWord: book.title,
+    chosenOptionLetter: firstPage?.highlightLetter || 'L',
+    isCorrect: true,
+    timeSpentSeconds: book.pages.length * 20,
+  });
+
+  return progressSaved;
 }

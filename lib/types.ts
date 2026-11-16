@@ -75,4 +75,26 @@ export interface ParentTip {
   targetSkill: string;
 }
 
-export type ScreenState = 'auth' | 'map' | 'activity' | 'feedback' | 'progress' | 'dashboard';
+export interface StoryPage {
+  pageNumber: number;
+  text: string;
+  illustrationDescription: string;
+  sceneEmoji: string;
+  highlightWord: string;
+  highlightLetter: string;
+  accentBg: string;
+}
+
+export interface Storybook {
+  id: string;
+  title: string;
+  theme: string;
+  summary: string;
+  moral: string;
+  coverEmoji: string;
+  coverAccent: string;
+  isGenerated?: boolean;
+  pages: StoryPage[];
+}
+
+export type ScreenState = 'auth' | 'map' | 'activity' | 'feedback' | 'progress' | 'dashboard' | 'library';

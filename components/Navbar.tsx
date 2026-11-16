@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Image from 'next/image';
-import { Compass, Sparkles, User, Award, ShieldCheck, Volume2, VolumeX } from 'lucide-react';
+import { Compass, Sparkles, User, Award, ShieldCheck, Volume2, VolumeX, BookOpen } from 'lucide-react';
 import { ChildProfile, ScreenState } from '@/lib/types';
 import { AVATAR_OPTIONS } from '@/lib/game-data';
 
@@ -78,6 +78,19 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Sparkles className="h-4 w-4 text-amber-500" />
             <span className="whitespace-nowrap">Atividade Sonora</span>
+          </button>
+
+          <button
+            onClick={() => onNavigate('library')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+              currentScreen === 'library'
+                ? 'bg-sky-50 text-sky-800 shadow-xs ring-1 ring-sky-200'
+                : 'text-slate-600 hover:text-sky-600 hover:bg-slate-50'
+            }`}
+          >
+            <BookOpen className="h-4 w-4 text-sky-500" />
+            <span className="hidden lg:inline">Biblioteca de Histórias</span>
+            <span className="lg:hidden">Livros</span>
           </button>
 
           <button
@@ -186,6 +199,15 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <Sparkles className="h-4 w-4" />
           <span>Atividade</span>
+        </button>
+        <button
+          onClick={() => onNavigate('library')}
+          className={`flex flex-col items-center gap-0.5 px-3 py-1 text-[11px] font-bold rounded-lg transition-colors ${
+            currentScreen === 'library' ? 'text-sky-600' : 'text-slate-500'
+          }`}
+        >
+          <BookOpen className="h-4 w-4" />
+          <span>Livros</span>
         </button>
         <button
           onClick={() => onNavigate('progress')}

@@ -8,6 +8,7 @@ import { ActivityScreen } from '@/components/ActivityScreen';
 import { FeedbackScreen } from '@/components/FeedbackScreen';
 import { ProgressScreen } from '@/components/ProgressScreen';
 import { ParentDashboard, ParentalGateModal } from '@/components/ParentDashboard';
+import { StorybookScreen } from '@/components/StorybookScreen';
 import {
   ScreenState,
   ChildProfile,
@@ -16,6 +17,7 @@ import {
   ActivityQuestion,
   ActivityOption,
   Medal,
+  Storybook,
 } from '@/lib/types';
 import { INITIAL_LEVELS, ACTIVITY_QUESTIONS, INITIAL_MEDALS } from '@/lib/game-data';
 import { playPopSound, playSuccessSound } from '@/lib/sound';
@@ -23,6 +25,7 @@ import {
   savePhaseProgressToSupabase,
   saveMedalToSupabase,
   logActivityToSupabase,
+  saveBookCompletionToSupabase,
   getActiveSessionWorkspace,
   signOutWithSupabase,
   RestoredWorkspace,
@@ -53,6 +56,10 @@ export default function HomePage() {
   // Medals & Gamification
   const [medals, setMedals] = useState<Medal[]>(INITIAL_MEDALS);
 
+  // Storybook Library State
+  const [completedBookIds, setCompletedBookIds] = useState<string[]>([]);
+  const [customBooks, setCustomBooks] = useState<Storybook[]>([]);
+
   // Sound Control
   const [soundEnabled, setSoundEnabled] = useState(true);
 
@@ -69,6 +76,12 @@ export default function HomePage() {
         const savedChild = localStorage.getItem('aventura_child_profile');
         const savedLevels = localStorage.getItem('aventura_levels');
         const savedMedals = localStorage.getItem('aventura_medals');
+        const savedCompletedBooks = localStorage.getItem('aventura_completed_books');
+        const savedCustomBooks = localStorage.getItem('aventura_custom_books');
+
+        if (savedCustomBooks) {
+          setCustomBooks(JSON.parse(savedCustomBooks) as Storybook[]);
+        }
 
         if (savedParent) {
           const parsedParent = JSON.parse(savedParent) as { id?: string };
@@ -97,6 +110,10 @@ export default function HomePage() {
           if (savedMedals) {
             setMedals(JSON.parse(savedMedals) as Medal[]);
           }
+
+          if (savedCompletedBooks) {
+            setCompletedBookIds(JSON.parse(savedCompletedBooks) as string[]);
+          }
         }
       } catch {}
 
@@ -121,6 +138,7 @@ export default function HomePage() {
         setChildProfile(sessionData.workspace.child);
         setLevels(sessionData.workspace.levels);
         setMedals(sessionData.workspace.medals);
+        setCompletedBookIds(sessionData.workspace.completedBookIds);
 
         const flatPhases = sessionData.workspace.levels.flatMap((lvl) => lvl.phases);
         const activePhase =
@@ -144,6 +162,10 @@ export default function HomePage() {
             'aventura_medals',
             JSON.stringify(sessionData.workspace.medals)
           );
+          localStorage.setItem(
+            'aventura_completed_books',
+            JSON.stringify(sessionData.workspace.completedBookIds)
+          );
         } catch {}
 
         setCurrentScreen((prev) => (prev === 'auth' ? 'map' : prev));
@@ -157,10 +179,12 @@ export default function HomePage() {
     };
   }, []);
 
-  // Calculate total stars
-  const totalStars = levels.reduce((acc, lvl) => {
-    return acc + lvl.phases.reduce((pAcc, p) => pAcc + p.starsEarned, 0);
-  }, 0);
+  // Calculate total stars (trilha de fases + livros concluídos)
+  const totalStars =
+    levels.reduce((acc, lvl) => {
+      return acc + lvl.phases.reduce((pAcc, p) => pAcc + p.starsEarned, 0);
+    }, 0) +
+    completedBookIds.length * 3;
 
   // Calculate completed phases
   const completedPhasesCount = levels.reduce((acc, lvl) => {
@@ -184,6 +208,7 @@ export default function HomePage() {
     if (restoredWorkspace) {
       setLevels(restoredWorkspace.levels);
       setMedals(restoredWorkspace.medals);
+      setCompletedBookIds(restoredWorkspace.completedBookIds);
 
       const flatPhases = restoredWorkspace.levels.flatMap((lvl) => lvl.phases);
       const activePhase =
@@ -202,6 +227,10 @@ export default function HomePage() {
         localStorage.setItem(
           'aventura_medals',
           JSON.stringify(restoredWorkspace.medals)
+        );
+        localStorage.setItem(
+          'aventura_completed_books',
+          JSON.stringify(restoredWorkspace.completedBookIds)
         );
       } catch {}
     }
@@ -342,13 +371,82 @@ export default function HomePage() {
     setCurrentScreen('activity');
   };
 
+  // Adicionar nova história gerada pelo Gemini na biblioteca local
+  const handleAddCustomBook = (book: Storybook) => {
+    setCustomBooks((prev) => {
+      const next = [book, ...prev];
+      try {
+        localStorage.setItem('aventura_custom_books', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  // Concluir leitura de um livro: salva estrelas, medalhas de leitura (m9/m10) e sincroniza Supabase
+  const handleCompleteBook = (book: Storybook) => {
+    const alreadyCompleted = completedBookIds.includes(book.id);
+    const nextCompleted = alreadyCompleted
+      ? completedBookIds
+      : [...completedBookIds, book.id];
+
+    if (!alreadyCompleted) {
+      setCompletedBookIds(nextCompleted);
+      try {
+        localStorage.setItem(
+          'aventura_completed_books',
+          JSON.stringify(nextCompleted)
+        );
+      } catch {}
+    }
+
+    const phaseStars = levels.reduce(
+      (acc, lvl) => acc + lvl.phases.reduce((pAcc, p) => pAcc + p.starsEarned, 0),
+      0
+    );
+    const nextTotalStars = phaseStars + nextCompleted.length * 3;
+    const unlockGuardian = nextCompleted.length >= 3;
+    const unlockStarCollector = nextTotalStars >= 15;
+
+    if (childProfile) {
+      void saveBookCompletionToSupabase(childProfile.id, book);
+      void saveMedalToSupabase(childProfile.id, 'm9');
+      if (unlockGuardian) {
+        void saveMedalToSupabase(childProfile.id, 'm10');
+      }
+      if (unlockStarCollector) {
+        void saveMedalToSupabase(childProfile.id, 'm6');
+      }
+    }
+
+    setMedals((prevMedals) => {
+      const nextMedals = prevMedals.map((m) => {
+        if (m.id === 'm9' && !m.unlocked) {
+          return { ...m, unlocked: true, unlockedDate: 'Hoje' };
+        }
+        if (m.id === 'm10' && unlockGuardian && !m.unlocked) {
+          return { ...m, unlocked: true, unlockedDate: 'Hoje' };
+        }
+        if (m.id === 'm6' && unlockStarCollector && !m.unlocked) {
+          return { ...m, unlocked: true, unlockedDate: 'Hoje' };
+        }
+        return m;
+      });
+      try {
+        localStorage.setItem('aventura_medals', JSON.stringify(nextMedals));
+      } catch {}
+      return nextMedals;
+    });
+  };
+
   // Reset entire game progress
   const handleResetProgress = () => {
     setLevels(INITIAL_LEVELS);
     setMedals(INITIAL_MEDALS);
+    setCompletedBookIds([]);
     try {
       localStorage.removeItem('aventura_levels');
       localStorage.removeItem('aventura_medals');
+      localStorage.removeItem('aventura_completed_books');
     } catch {}
     playSuccessSound();
   };
@@ -361,12 +459,14 @@ export default function HomePage() {
     setActiveParentId('');
     setLevels(INITIAL_LEVELS);
     setMedals(INITIAL_MEDALS);
+    setCompletedBookIds([]);
     setCurrentPhase(INITIAL_LEVELS[0].phases[2]);
     try {
       localStorage.removeItem('aventura_child_profile');
       localStorage.removeItem('aventura_parent_account');
       localStorage.removeItem('aventura_levels');
       localStorage.removeItem('aventura_medals');
+      localStorage.removeItem('aventura_completed_books');
     } catch {}
     setCurrentScreen('auth');
     playPopSound();
@@ -449,6 +549,19 @@ export default function HomePage() {
             onNextQuestion={handleNextQuestion}
             onRetryQuestion={handleRetryQuestion}
             onBackToMap={() => setCurrentScreen('map')}
+          />
+        )}
+
+        {currentScreen === 'library' && (
+          <StorybookScreen
+            childProfile={childProfile}
+            soundEnabled={soundEnabled}
+            completedBookIds={completedBookIds}
+            customBooks={customBooks}
+            onAddCustomBook={handleAddCustomBook}
+            onCompleteBook={handleCompleteBook}
+            onNavigateProgress={() => setCurrentScreen(childProfile ? 'progress' : 'auth')}
+            onNavigateMap={() => setCurrentScreen(childProfile ? 'map' : 'auth')}
           />
         )}
 

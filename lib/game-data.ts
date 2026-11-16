@@ -354,6 +354,24 @@ export const INITIAL_MEDALS: Medal[] = [
     unlocked: false,
     color: 'from-amber-500 to-orange-500',
   },
+  {
+    id: 'm9',
+    title: 'Leitor Curioso',
+    description: 'Concluiu a leitura completa do primeiro livrinho na Biblioteca de Histórias.',
+    icon: '📖',
+    category: 'dedicacao',
+    unlocked: false,
+    color: 'from-sky-400 to-blue-500',
+  },
+  {
+    id: 'm10',
+    title: 'Guardião das Histórias',
+    description: 'Completou 3 ou mais livros inteiros na Biblioteca de Histórias.',
+    icon: '🦉',
+    category: 'aventura',
+    unlocked: false,
+    color: 'from-violet-400 to-purple-500',
+  },
 ];
 
 export const BNCC_SKILLS: BnccSkill[] = [
